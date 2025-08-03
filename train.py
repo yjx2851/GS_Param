@@ -22,6 +22,7 @@ from tqdm import tqdm
 from utils.image_utils import psnr, render_net_image
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
+from torchvision.utils import save_image
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -70,6 +71,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         render_pkg = render(viewpoint_cam, gaussians, pipe, background)
         image, segment_image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["segment"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         
+        # debug 保存 image 和 segment_image
+        if iteration % 1000 == 0:
+            save_image(image, os.path.join(dataset.model_path, "iter{}_image.png".format(iteration)))
+            save_image(segment_image, os.path.join(dataset.model_path, "iter{}_segment.png".format(iteration)))
+
+
         gt_image = viewpoint_cam.original_image.cuda()
         gt_segment = viewpoint_cam.original_edge.cuda()
         seg_loss=l1_loss(segment_image, gt_segment)
@@ -138,7 +145,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
-                    # TODO: segment process
 
             # Optimizer step
             if iteration < opt.iterations:

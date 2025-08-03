@@ -214,9 +214,7 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
             frame["edge_path"] = frame["file_path"].replace("train_img", "train")
             edge_name=os.path.join(path,frame["edge_path"]+extension)
             edge_path=os.path.join(path,edge_name)
-            edge_image = Image.open(edge_path)
-            edge_data = np.array(edge_image.convert("L"))/255.0
-            edge_image = Image.fromarray(np.array(edge_data, dtype=np.byte), "L")
+            edge_image = Image.open(edge_path).convert("L")
 
             fovy = focal2fov(fov2focal(fovx, image.size[0]), image.size[1])
             FovY = fovy 

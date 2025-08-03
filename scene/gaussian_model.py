@@ -220,10 +220,9 @@ class GaussianModel:
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
 
-        segment_dtype_full = [(attribute, 'f4') for attribute in ['x', 'y', 'z', 'nx', 'ny', 'nz']]
+        segment_dtype_full = [(attribute, 'f4') for attribute in ['x', 'y', 'z', 'r', 'g', 'b']]
         segment_elements = np.empty(xyz.shape[0], dtype=segment_dtype_full)
         segments = self._segment.detach().cpu().numpy()
-        segments +=100
         segment_attributes = np.concatenate((xyz, segments,segments,segments), axis=1)
         segment_elements[:] = list(map(tuple, segment_attributes))
         segment_el = PlyElement.describe(segment_elements, 'vertex')
