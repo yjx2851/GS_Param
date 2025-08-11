@@ -72,9 +72,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         image, segment_image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["segment"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         
         # debug 保存 image 和 segment_image
-        if iteration % 1000 == 0:
-            save_image(image, os.path.join(dataset.model_path, "iter{}_image.png".format(iteration)))
-            save_image(segment_image, os.path.join(dataset.model_path, "iter{}_segment.png".format(iteration)))
+        # if iteration % 1000 == 0:
+            # save_image(image, os.path.join(dataset.model_path, "iter{}_image.png".format(iteration)))
+            # save_image(segment_image, os.path.join(dataset.model_path, "iter{}_segment.png".format(iteration)))
 
 
         gt_image = viewpoint_cam.original_image.cuda()
@@ -83,7 +83,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         Ll1 = l1_loss(image, gt_image)
                 
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))+seg_loss
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))+ 0.1 * seg_loss
         
         # regularization
         lambda_normal = opt.lambda_normal if iteration > 7000 else 0.0
