@@ -87,6 +87,7 @@ class OptimizationParams(ParamGroup):
         self.lambda_normal = 0.05
         self.opacity_cull = 0.05
         self.segment_lr = 0.01
+        self.extra_features_lr = 0.01
 
         self.densification_interval = 100
         self.opacity_reset_interval = 3000

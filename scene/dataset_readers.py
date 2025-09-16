@@ -31,6 +31,7 @@ class CameraInfo(NamedTuple):
     FovX: np.array
     image: np.array
     edge: np.array
+    mask: np.array
     image_path: str
     image_name: str
     width: int
@@ -216,18 +217,27 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
             edge_path=os.path.join(path,edge_name)
             edge_image = Image.open(edge_path).convert("L")
 
+            # add segment data1
+            frame["mask_path"] = frame["file_path"].replace("train_img", "mask_img")
+            mask_name=os.path.join(path,frame["mask_path"]+extension)
+            mask_path=os.path.join(path,mask_name)
+            mask_image = Image.open(mask_path).convert("RGBA")
+            mask_image = np.array(mask_image)[:,:,:1].squeeze(-1)
+            mask_image = Image.fromarray(mask_image, "L")
+
+
             fovy = focal2fov(fov2focal(fovx, image.size[0]), image.size[1])
             FovY = fovy 
             FovX = fovx
 
-            cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image,edge=edge_image,
+            cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image,edge=edge_image,mask=mask_image,
                             image_path=image_path, image_name=image_name, width=image.size[0], height=image.size[1]))
             
     return cam_infos
 
 def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
     print("Reading Training Transforms")
-    train_cam_infos = readCamerasFromTransforms(path, "transforms_train_for_GS_color.json", white_background, extension)
+    train_cam_infos = readCamerasFromTransforms(path, "transforms_train_for_originGS.json", white_background, extension)
     print("Reading Test Transforms")
     # test_cam_infos = readCamerasFromTransforms(path, "transforms_test.json", white_background, extension)
     test_cam_infos = []

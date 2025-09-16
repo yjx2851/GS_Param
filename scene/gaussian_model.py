@@ -38,6 +38,7 @@ class GaussianModel:
         self.covariance_activation = build_covariance_from_scaling_rotation
         self.opacity_activation = torch.sigmoid
         self.segment_activation = torch.sigmoid
+        self.extra_features_activation = torch.nn.functional.normalize
         self.inverse_opacity_activation = inverse_sigmoid
         self.inverse_segment_activation = inverse_sigmoid
         self.rotation_activation = torch.nn.functional.normalize
@@ -60,6 +61,8 @@ class GaussianModel:
         self.spatial_lr_scale = 0
         
         self._segment = torch.empty(0)
+        self._extra_features = torch.empty(0)
+        self.extra_feature_degree = 16  # Default feature dimension
         
         self.setup_functions()
 
@@ -78,6 +81,8 @@ class GaussianModel:
             self.optimizer.state_dict(),
             self.spatial_lr_scale,
             self._segment,
+            self._extra_features,
+            self.extra_feature_degree,
         )
     
     def restore(self, model_args, training_args):
@@ -93,7 +98,9 @@ class GaussianModel:
         denom,
         opt_dict, 
         self.spatial_lr_scale,
-        self._segment) = model_args
+        self._segment,
+        self._extra_features,
+        self.extra_feature_degree) = model_args
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
         self.denom = denom
@@ -125,6 +132,10 @@ class GaussianModel:
     def get_segment(self):
         return self.segment_activation(self._segment)
     
+    @property
+    def get_extra_features(self):
+        return self.extra_features_activation(self._extra_features)
+    
     def get_covariance(self, scaling_modifier = 1):
         return self.covariance_activation(self.get_xyz, self.get_scaling, scaling_modifier, self._rotation)
 
@@ -148,6 +159,9 @@ class GaussianModel:
 
         opacities = self.inverse_opacity_activation(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
         segments=self.inverse_segment_activation(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
+        
+        # Initialize extra_features with random values
+        extra_features = torch.ones((fused_point_cloud.shape[0], self.extra_feature_degree), dtype=torch.float, device="cuda")
 
         self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
         self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
@@ -157,6 +171,7 @@ class GaussianModel:
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
         self._segment = nn.Parameter(segments.requires_grad_(True))
+        self._extra_features = nn.Parameter(extra_features.requires_grad_(True))
 
     def training_setup(self, training_args):
         self.percent_dense = training_args.percent_dense
@@ -169,6 +184,7 @@ class GaussianModel:
             {'params': [self._features_rest], 'lr': training_args.feature_lr / 20.0, "name": "f_rest"},
             {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
             {'params': [self._segment], 'lr': training_args.segment_lr, "name": "segment"},
+            {'params': [self._extra_features], 'lr': training_args.extra_features_lr, "name": "extra_features"},
             {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
         ]
@@ -199,7 +215,87 @@ class GaussianModel:
             l.append('scale_{}'.format(i))
         for i in range(self._rotation.shape[1]):
             l.append('rot_{}'.format(i))
+        # Add extra_features attributes
+        for i in range(self.extra_feature_degree):
+            l.append('extra_feature_{}'.format(i))
         return l
+
+    def save_ply_with_segment(self, path):
+        """
+        保存带segment颜色的PLY文件
+        将segment值映射为不同颜色，相近的值使用相近的颜色
+        """
+        mkdir_p(os.path.dirname(path))
+        
+        xyz = self._xyz.detach().cpu().numpy()
+        segments = self._segment.detach().cpu().numpy()
+        
+        # 将segment值转换为整数（只保留整数部分）
+        segment_values = segments.astype(int).flatten()
+        
+        # 获取唯一的segment值并排序
+        unique_segments = np.unique(segment_values)
+        sorted_segments = np.sort(unique_segments)
+        num_segments = len(sorted_segments)
+        
+        print(f"保存segment PLY文件: {path}")
+        print(f"唯一segment值数量: {num_segments}")
+        print(f"Segment值范围: {sorted_segments.min()} - {sorted_segments.max()}")
+        
+        # 为每个唯一的segment值分配随机颜色
+        color_map = {}
+        
+        # 设置随机种子，确保结果可重现
+        np.random.seed(42)
+        
+        for seg_val in sorted_segments:
+            # 生成随机RGB颜色 (0-255)
+            color = np.random.randint(0, 256, 3)
+            color_map[seg_val] = color
+            print(f"Segment {seg_val} -> RGB {color}")
+        
+        # 为每个点分配颜色
+        colors = np.zeros((len(segment_values), 3), dtype=np.uint8)
+        for i, seg_val in enumerate(segment_values):
+            colors[i] = color_map[seg_val]
+        
+        # 创建PLY数据
+        dtype = [('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
+                 ('red', 'u1'), ('green', 'u1'), ('blue', 'u1')]
+        
+        elements = np.empty(xyz.shape[0], dtype=dtype)
+        elements['x'] = xyz[:, 0]
+        elements['y'] = xyz[:, 1] 
+        elements['z'] = xyz[:, 2]
+        elements['red'] = colors[:, 0]
+        elements['green'] = colors[:, 1]
+        elements['blue'] = colors[:, 2]
+        
+        # 写入PLY文件
+        el = PlyElement.describe(elements, 'vertex')
+        PlyData([el]).write(path)
+        print(f"成功保存 {len(xyz)} 个点到 {path}")
+    
+
+    def save_pcd(self, path, similarity_threshold=0.7, min_cluster_size=5):
+        """
+        Save Gaussian model as PCD file with feature-based similarity labels.
+        
+        Args:
+            path: Path to save the PCD file
+            similarity_threshold: Cosine similarity threshold for feature grouping (0-1)
+            min_cluster_size: Minimum number of points required to form a group
+        """
+        from utils.pcd_utils import gaussians_to_pcd
+        
+        print(f"Saving Gaussian model as PCD with feature-based labels...")
+        gaussians_to_pcd(
+            self, 
+            path, 
+            similarity_threshold=similarity_threshold,
+            min_cluster_size=min_cluster_size,
+            default_color=(0.5, 0.5, 0.5)
+        )
 
     def save_ply(self, path):
         mkdir_p(os.path.dirname(path))
@@ -211,22 +307,17 @@ class GaussianModel:
         opacities = self._opacity.detach().cpu().numpy()
         scale = self._scaling.detach().cpu().numpy()
         rotation = self._rotation.detach().cpu().numpy()
+        extra_features = self._extra_features.detach().cpu().numpy()
         
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
-        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
+        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation, extra_features), axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
 
-        segment_dtype_full = [(attribute, 'f4') for attribute in ['x', 'y', 'z', 'r', 'g', 'b']]
-        segment_elements = np.empty(xyz.shape[0], dtype=segment_dtype_full)
-        segments = self._segment.detach().cpu().numpy()
-        segment_attributes = np.concatenate((xyz, segments,segments,segments), axis=1)
-        segment_elements[:] = list(map(tuple, segment_attributes))
-        segment_el = PlyElement.describe(segment_elements, 'vertex')
-        PlyData([segment_el]).write(path.replace('.ply', '_segment.ply'))
+        self.save_ply_with_segment(path.replace('.ply', '_segment.ply'))
     
     def reset_opacity(self):
         opacities_new = self.inverse_opacity_activation(torch.min(self.get_opacity, torch.ones_like(self.get_opacity)*0.01))
@@ -320,6 +411,7 @@ class GaussianModel:
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
         self._segment = optimizable_tensors["segment"]
+        self._extra_features = optimizable_tensors["extra_features"]
 
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
 
@@ -348,12 +440,13 @@ class GaussianModel:
 
         return optimizable_tensors
 
-    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities,new_segment, new_scaling, new_rotation):
+    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities,new_segment, new_extra_features, new_scaling, new_rotation):
         d = {"xyz": new_xyz,
         "f_dc": new_features_dc,
         "f_rest": new_features_rest,
         "opacity": new_opacities,
         "segment": new_segment,
+        "extra_features": new_extra_features,
         "scaling" : new_scaling,
         "rotation" : new_rotation}
 
@@ -363,6 +456,7 @@ class GaussianModel:
         self._features_rest = optimizable_tensors["f_rest"]
         self._opacity = optimizable_tensors["opacity"]
         self._segment = optimizable_tensors["segment"]
+        self._extra_features = optimizable_tensors["extra_features"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
 
@@ -391,8 +485,9 @@ class GaussianModel:
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N,1,1)
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
         new_segment = self._segment[selected_pts_mask].repeat(N, 1)
-
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_segment, new_scaling, new_rotation)
+        new_extra_features = self._extra_features[selected_pts_mask].repeat(N, 1)
+        
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_segment, new_extra_features, new_scaling, new_rotation)
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
@@ -410,8 +505,9 @@ class GaussianModel:
         new_scaling = self._scaling[selected_pts_mask]
         new_rotation = self._rotation[selected_pts_mask]
         new_segments = self._segment[selected_pts_mask]
+        new_extra_features = self._extra_features[selected_pts_mask]
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_segments, new_scaling, new_rotation)
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_segments, new_extra_features, new_scaling, new_rotation)
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size):
         grads = self.xyz_gradient_accum / self.denom

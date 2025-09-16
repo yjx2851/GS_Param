@@ -56,6 +56,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     means2D = screenspace_points
     opacity = pc.get_opacity
     segment = pc.get_segment
+    extra_features = pc.get_extra_features
 
     # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
     # scaling / rotation by the rasterizer.
@@ -95,13 +96,15 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     else:
         colors_precomp = override_color
     
-    rendered_image, segment_image, radii, allmap = rasterizer(
+    rendered_image, segment_image, extra_features_image, radii, allmap = rasterizer(
         means3D = means3D,
         means2D = means2D,
         shs = shs,
         colors_precomp = colors_precomp,
         opacities = opacity,
         segments = segment,
+        extra_features = extra_features,
+        feature_degree = pc.extra_feature_degree,
         scales = scales,
         rotations = rotations,
         cov3D_precomp = cov3D_precomp
@@ -111,6 +114,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     # They will be excluded from value updates used in the splitting criteria.
     rets =  {"render": rendered_image,
             "segment": segment_image,
+            "extra_features": extra_features_image,
             "viewspace_points": means2D,
             "visibility_filter" : radii > 0,
             "radii": radii,

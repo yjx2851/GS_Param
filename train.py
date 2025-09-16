@@ -12,7 +12,7 @@
 import os
 import torch
 from random import randint
-from utils.loss_utils import l1_loss, ssim
+from utils.loss_utils import l1_loss, ssim, surface_loss
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
@@ -69,7 +69,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
         
         render_pkg = render(viewpoint_cam, gaussians, pipe, background)
-        image, segment_image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["segment"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+        # TODO: 获取分割渲染图
+        image, segment_image, feature_image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["segment"], render_pkg["extra_features"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         
         # debug 保存 image 和 segment_image
         # if iteration % 1000 == 0:
@@ -78,12 +79,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
 
         gt_image = viewpoint_cam.original_image.cuda()
-        gt_segment = viewpoint_cam.original_edge.cuda()
-        seg_loss=l1_loss(segment_image, gt_segment)
+        id=int(viewpoint_cam.image_name.split("_")[0])
+        gt_edge = viewpoint_cam.original_edge.cuda()
+        gt_mask = viewpoint_cam.original_mask.cuda()
+        mask_loss = surface_loss(feature_image, gt_mask,debug_id=id)
+        # TODO: 根据 mask 计算损失
+        # TODO: 先取消边界图的计算
+        
+        # edge loss
+        edge_loss=l1_loss(segment_image, gt_edge)
 
         Ll1 = l1_loss(image, gt_image)
                 
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))+ 0.1 * seg_loss
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)) + 0.1 * mask_loss + 0.1 * edge_loss
         
         # regularization
         lambda_normal = opt.lambda_normal if iteration > 7000 else 0.0
